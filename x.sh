@@ -3,7 +3,7 @@
 SRC="$1"
 OUT="${SRC%.*}"
 EXT="${SRC##*.}"
-INPUT="$2"
+INPUT="${SRC%.*}.in"
 
 case ${EXT} in
   cpp | c++ | cxx)
