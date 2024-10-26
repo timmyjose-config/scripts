@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 
 SRC="$1"
+shift
+
 OUT="${SRC%.*}"
 EXT="${SRC##*.}"
 INPUT="${SRC%.*}.in"
+FLAG="$@"
 
 case ${EXT} in
   cpp | c++ | cxx)
@@ -15,7 +18,9 @@ case ${EXT} in
       ./${OUT}
     fi
 
-    rm -f ${OUT}
+    if [[ "${FLAG}" != *"--no-clean"* ]]; then
+      rm -f ${OUT}
+    fi
     ;;
 
   java)
@@ -27,7 +32,9 @@ case ${EXT} in
       java -cp . ${OUT}
     fi
 
-    rm -f "${OUT}.class"
+    if [[ "${FLAG}" != *"--no-clean"* ]]; then
+      rm -f "${OUT}.class"
+    fi
 
     ;;
 
@@ -40,7 +47,9 @@ case ${EXT} in
       ./${OUT}
     fi
 
-    rm -f ${OUT}
+    if [[ "${FLAG}" != *"--no-clean"* ]]; then
+      rm -f ${OUT}
+    fi
     ;;
 
   py)
