@@ -23,6 +23,20 @@ case ${EXT} in
     fi
     ;;
 
+  hs)
+    ghc -o ${OUT} ${SRC}
+
+    if [[ -f "${INPUT}" ]]; then
+      ./${OUT} < ${INPUT}
+    else
+      ./${OUT}
+    fi
+
+    if [[ "${FLAG}" != *"--no-clean"* ]]; then
+      rm -f ${OUT} ${OUT}.hi ${OUT}.o
+    fi
+    ;;
+
   c)
     gcc -Wall -Werror -std=c11 -o ${OUT} ${SRC}
 
