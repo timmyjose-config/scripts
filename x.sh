@@ -9,6 +9,20 @@ INPUT="${SRC%.*}.in"
 FLAG="$@"
 
 case ${EXT} in
+  m)
+    clang -std=c99 -Wall -Werror -Wextra -lobjc -framework Foundation ${SRC} -o ${OUT}
+
+    if [[ -f "${INPUT}" ]]; then
+      ./${OUT} < ${INPUT}
+    else
+      ./${OUT}
+    fi
+
+    if [[ "${FLAG}" != *"--no-clean"* ]]; then
+      rm -f ${OUT}
+    fi
+    ;;
+
   swift)
     swiftc ${SRC}
 
