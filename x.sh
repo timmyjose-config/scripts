@@ -8,84 +8,65 @@ EXT="${SRC##*.}"
 INPUT="${SRC%.*}.in"
 FLAG="$@"
 
-case ${EXT} in
-  m)
-    clang -std=c99 -Wall -Werror -Wextra -lobjc -framework Foundation ${SRC} -o ${OUT}
-
+run_binary() {
     if [[ -f "${INPUT}" ]]; then
-      ./${OUT} < ${INPUT}
+      ./"${OUT}" < ${INPUT}
     else
-      ./${OUT}
+      ./"${OUT}"
     fi
 
     if [[ "${FLAG}" != *"--no-clean"* ]]; then
-      rm -f ${OUT}
+      rm -f "${OUT}"
     fi
+}
+
+case ${EXT} in
+  mm)
+    clang++ -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
+    run_binary
+    ;;
+
+  m)
+    clang -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
+    run_binary
     ;;
 
   swift)
-    swiftc ${SRC}
-
-    if [[ -f "${INPUT}" ]]; then
-      ./${OUT} < ${INPUT}
-    else
-      ./${OUT}
-    fi
-
-    if [[ "${FLAG}" != *"--no-clean"* ]]; then
-      rm -f ${OUT}
-    fi
+    swiftc "${SRC}"
+    run_binary
     ;;
 
   hs)
-    ghc -o ${OUT} ${SRC}
+    ghc -o "${OUT}" "${SRC}"
 
     if [[ -f "${INPUT}" ]]; then
-      ./${OUT} < ${INPUT}
+      ./"${OUT}" < ${INPUT}
     else
-      ./${OUT}
+      ./"${OUT}"
     fi
 
     if [[ "${FLAG}" != *"--no-clean"* ]]; then
-      rm -f ${OUT} ${OUT}.hi ${OUT}.o
+      rm -f "${OUT}" "${OUT}".hi "${OUT}".o
     fi
     ;;
 
   c)
-    gcc -Wall -Werror -std=c11 -o ${OUT} ${SRC}
-
-    if [[ -f "${INPUT}" ]]; then
-      ./${OUT} < ${INPUT}
-    else
-      ./${OUT}
-    fi
-
-    if [[ "${FLAG}" != *"--no-clean"* ]]; then
-      rm -f ${OUT}
-    fi
+    gcc -Wall -Werror -std=c11 -o "${OUT}" "${SRC}"
+    run_binary
     ;;
 
   cpp | c++ | cxx)
-    g++ -Wall -Werror -std=c++2a -o ${OUT} ${SRC}
-
-    if [[ -f "${INPUT}" ]]; then
-      ./${OUT} < ${INPUT}
-    else
-      ./${OUT}
-    fi
-
-    if [[ "${FLAG}" != *"--no-clean"* ]]; then
-      rm -f ${OUT}
-    fi
+    g++ -Wall -Werror -std=c++2a -o "${OUT}" "${SRC}"
+    run_binary
     ;;
 
   java)
-    javac ${SRC}
+    javac "${SRC}"
 
     if [[ -f "${INPUT}" ]]; then
-      java -cp . ${OUT} < ${INPUT}
+      java -cp . "${OUT}" < ${INPUT}
     else
-      java -cp . ${OUT}
+      java -cp . "${OUT}"
     fi
 
     if [[ "${FLAG}" != *"--no-clean"* ]]; then
@@ -95,28 +76,19 @@ case ${EXT} in
     ;;
 
   rs)
-    rustc -O ${SRC}
-
-    if [[ -f "${INPUT}" ]]; then
-      ./${OUT} < ${INPUT}
-    else
-      ./${OUT}
-    fi
-
-    if [[ "${FLAG}" != *"--no-clean"* ]]; then
-      rm -f ${OUT}
-    fi
+    rustc -O "${SRC}"
+    run_binary
     ;;
 
   py)
     if [[ -f "${INPUT}" ]]; then
-      python3 ${SRC} < ${INPUT}
+      python3 "${SRC}" < ${INPUT}
     else
-      python3 ${SRC}
+      python3 "${SRC}"
     fi
     ;;
 
   *)
-    echo "Unsupported file type: ${EXTENSION}"
+    echo "Unsupported file type: ${EXT}"
     ;;
 esac
