@@ -10,7 +10,7 @@ FLAG="$@"
 
 run_binary() {
     if [[ -f "${INPUT}" ]]; then
-      ./"${OUT}" < ${INPUT}
+      ./"${OUT}" < "${INPUT}"
     else
       ./"${OUT}"
     fi
@@ -21,6 +21,16 @@ run_binary() {
 }
 
 case ${EXT} in
+  f90)
+    gfortran "${SRC}" -fcoarray=single -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
+
+    run_binary
+    ;;
+  nim)
+    nim c --verbosity:0 --hints:off -d:release "${SRC}" 
+    run_binary
+    ;;
+
   mm)
     clang++ -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
     run_binary
@@ -40,7 +50,7 @@ case ${EXT} in
     ghc -o "${OUT}" "${SRC}"
 
     if [[ -f "${INPUT}" ]]; then
-      ./"${OUT}" < ${INPUT}
+      ./"${OUT}" < "${INPUT}"
     else
       ./"${OUT}"
     fi
@@ -64,7 +74,7 @@ case ${EXT} in
     javac "${SRC}"
 
     if [[ -f "${INPUT}" ]]; then
-      java -cp . "${OUT}" < ${INPUT}
+      java -cp . "${OUT}" < "${INPUT}"
     else
       java -cp . "${OUT}"
     fi
@@ -82,7 +92,7 @@ case ${EXT} in
 
   py)
     if [[ -f "${INPUT}" ]]; then
-      python3 "${SRC}" < ${INPUT}
+      python3 "${SRC}" < "${INPUT}"
     else
       python3 "${SRC}"
     fi
