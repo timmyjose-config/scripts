@@ -22,7 +22,7 @@ run_binary() {
 
 case ${EXT} in
   f90)
-    gfortran "${SRC}" -fcoarray=single -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
+    gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
 
     run_binary
     ;;
