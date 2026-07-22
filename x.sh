@@ -6,13 +6,25 @@ shift
 OUT="${SRC%.*}"
 EXT="${SRC##*.}"
 INPUT="${SRC%.*}.in"
-FLAG="$@"
+FLAG="$*"
+
+has_valgrind() {
+  command -v valgrind &> /dev/null
+}
 
 run_binary() {
+    local cmd=()
+
+    if has_valgrind; then
+      cmd+=(valgrind --leak-check=full)
+    fi
+
+    cmd+=(./"${OUT}")
+
     if [[ -f "${INPUT}" ]]; then
-      ./"${OUT}" < "${INPUT}"
+      "${cmd[@]}" < "${INPUT}"
     else
-      ./"${OUT}"
+      "${cmd[@]}"
     fi
 
     if [[ "${FLAG}" != *"--no-clean"* ]]; then
