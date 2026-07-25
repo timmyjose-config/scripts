@@ -33,6 +33,16 @@ run_binary() {
 }
 
 case ${EXT} in
+  s) 
+    as -o "${OUT}.o" "${SRC}"
+    ld -o "${OUT}" "${OUT}.o"
+
+    if [[ "${FLAG}" != *"--no-clean"* ]]; then
+      rm -f "${OUT}.o"
+    fi
+
+    run_binary
+    ;;
   f90)
     gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
 
