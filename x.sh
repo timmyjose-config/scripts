@@ -4,12 +4,16 @@ SRC=""
 SHOW_HELP=false
 DEBUG=true
 CLEAN=true
+RUN_VALGRIND=false
+RUN_THREAD_SAN=false
 
 for arg in "$@"; do
 	case $arg in
 	--help) SHOW_HELP=true ;;
 	--no-debug) DEBUG=false ;;
 	--no-clean) CLEAN=false ;;
+	--valgrind) RUN_VALGRIND=true ;;
+	--thread) RUN_THREAD_SAN=true ;;
 	-*)
 		echo "Unknown option: $arg"
 		exit 1
@@ -25,6 +29,8 @@ if [[ "$SHOW_HELP" == true ]]; then
 	echo "  --help       Show this help menu"
 	echo "  --no-debug   Disable debug mode and optimisations"
 	echo "  --no-clean   Prevent deletion of the generated binary"
+	echo "  --valgrind   Override defaults and use valgrind for runtime testing"
+	echo "  --thread     Switch memory sanitisation to ThreadSanitizer (catches data races)"
 	exit 0
 fi
 
@@ -46,11 +52,23 @@ has_valgrind() {
 run_binary() {
 	local cmd=()
 
-	if [[ "$DEBUG" == true ]] && has_valgrind; then
-		cmd+=(valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes)
+	# Use valgrind only if explicitly requested
+	if [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == true ]] && has_valgrind; then
+		local suppress=""
+
+		if [[ -f "$HOME/.config/valgrind/rust.supp" ]]; then
+			echo "Suppressions file found"
+			suppress="--suppressions=$HOME/.config/valgrind/rust.supp"
+		fi
+		cmd+=(valgrind "$suppress" --leak-check=full --show-leak-kinds=all --track-origins=yes)
 	fi
 
 	cmd+=(./"${OUT}")
+
+	# Force leak detection behaviour on for ASan executions
+	if [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]] && [[ "$RUN_THREAD_SAN" == false ]]; then
+		export ASAN_OPTIONS="detect_leaks=1"
+	fi
 
 	if [[ -f "${INPUT}" ]]; then
 		"${cmd[@]}" <"${INPUT}"
@@ -62,6 +80,26 @@ run_binary() {
 		rm -f "${OUT}"
 	fi
 }
+
+SAN_FLAGS=""
+RUST_SAN=""
+
+if [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]]; then
+	if [[ "$RUN_THREAD_SAN" == true ]]; then
+		SAN_FLAGS="-fsanitize=thread,undefined"
+		# only supported on nightly Rust
+		if rustc --version | grep -q "nightly"; then
+			RUST_SAN="-Z sanitizer=thread"
+		fi
+	else
+		# Default: Maximum memory protection + leak checking
+		SAN_FLAGS="-fsanitize=address,undefined"
+		# Only supported on nightly Rust
+		if rustc --version | grep -q "nightly"; then
+			RUST_SAN="-Z sanitizer=address"
+		fi
+	fi
+fi
 
 case ${EXT} in
 s)
@@ -79,63 +117,70 @@ s)
 
 	run_binary
 	;;
+
 f90)
 	if [[ "$DEBUG" == true ]]; then
-		gfortran "${SRC}" -g -O0 -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -march=native -o "${OUT}"
+		gfortran "${SRC}" -g -O0 -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -march=native ${SAN_FLAGS} -o "${OUT}"
 	else
 		gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
 	fi
 
 	run_binary
 	;;
+
 nim)
-	nim c --verbosity:0 --hints:off -d:release "${SRC}"
+	# Nim has built in custom trackers, defaults to standard release/debug configurations
+	if [[ "$DEBUG" == true ]]; then
+		nim c --verbosity:0 --hints:off --debuginfo:on "${SRC}"
+	else
+		nim c --verbosity:0 --hints:off -d:release "${SRC}"
+	fi
 	run_binary
 	;;
 
-mm)
-	clang++ -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
-	run_binary
-	;;
-
-m)
-	clang -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
+m | mm)
+	COMPILER="clang"
+	[[ "${EXT}" == "mm" ]] && COMPILER="clang++"
+	if [[ "$DEBUG" == true ]]; then
+		$COMPILER -g -Wall -Werror -Wextra -fobjc-arc -framework Foundation ${SAN_FLAGS} "${SRC}" -o "${OUT}"
+	else
+		$COMPILER -O2 -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
+	fi
 	run_binary
 	;;
 
 swift)
-	swiftc "${SRC}"
+	if [[ "$DEBUG" == true ]]; then
+		swiftc -g "${SRC}" -o "${OUT}"
+	fi
 	run_binary
 	;;
 
 hs)
-	ghc -o "${OUT}" "${SRC}"
-
-	if [[ -f "${INPUT}" ]]; then
-		./"${OUT}" <"${INPUT}"
+	if [[ "$DEBUG" == true ]]; then
+		ghc -g -o "${OUT}" "${SRC}"
 	else
-		./"${OUT}"
+		ghc -O2 -o "${OUT}" "${SRC}"
 	fi
 
-	if [[ "$CLEAN" == true ]]; then
-		rm -f "${OUT}" "${OUT}".hi "${OUT}".o
-	fi
+	if [[ -f "${INPUT}" ]]; then ./"${OUT}" <"${INPUT}"; else ./"${OUT}"; fi
+	[[ "$CLEAN" == true ]] && rm -f "${OUT}" "${OUT}".hi "${OUT}".o
 	;;
 
 c)
 	if [[ "$DEBUG" == true ]]; then
-		gcc -g -Wall -Werror -pedantic -std=c11 -o "${OUT}" "${SRC}"
+		gcc -g -Wall -Wextra -pedantic -std=c11 ${SAN_FLAGS} -o "${OUT}" "${SRC}"
 	else
-		gcc -Wall -Werror -std=c11 -O2 -o "${OUT}" "${SRC}"
+		gcc -Wall -Wextra -Werror -std=c11 -O2 -o "${OUT}" "${SRC}"
 	fi
 	run_binary
 	;;
 
 cpp | c++ | cxx)
 	if [[ "$DEBUG" == true ]]; then
-		g++ -g -Wall -Werror -pedantic -std=c++2a -o "${OUT}" "${SRC}"
+		g++ -g -Wall -Wextra -pedantic -std=c++2a ${SAN_FLAGS} -o "${OUT}" "${SRC}"
 	else
-		g++ -Wall -Werror -std=c++2a -O2 -o "${OUT}" "${SRC}"
+		g++ -Wall -Wextra -Werror -std=c++2a -O2 -o "${OUT}" "${SRC}"
 	fi
 	run_binary
 	;;
@@ -152,16 +197,14 @@ java)
 	if [[ "$CLEAN" == true ]]; then
 		rm -f "${OUT}.class"
 	fi
-
 	;;
 
 rs)
 	if [[ "$DEBUG" == true ]]; then
-		rustc -g "${SRC}"
+		rustc -g ${RUST_SAN} "${SRC}" -o "${OUT}"
 	else
-		rustc -O "${SRC}"
+		rustc -O "${SRC}" -o "${OUT}"
 	fi
-
 	run_binary
 	;;
 
