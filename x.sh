@@ -6,6 +6,11 @@ DEBUG=true
 CLEAN=true
 RUN_VALGRIND=false
 RUN_THREAD_SAN=false
+IS_MACOS=false
+
+if [[ $(uname -s) == "Darwin" ]]; then
+	IS_MACOS=true
+fi
 
 for arg in "$@"; do
 	case $arg in
@@ -27,10 +32,10 @@ if [[ "$SHOW_HELP" == true ]]; then
 	echo "Usage: x.sh [options] <input file>"
 	echo "Options:"
 	echo "  --help       Show this help menu"
-	echo "  --no-debug   Disable debug mode and optimisations"
-	echo "  --no-clean   Prevent deletion of the generated binary"
-	echo "  --valgrind   Override defaults and use valgrind for runtime testing"
-	echo "  --thread     Switch memory sanitisation to ThreadSanitizer (catches data races)"
+	echo "  --no-debug   Disable debug mode and optimisations (not on macOS)"
+	echo "  --no-clean   Prevent deletion of the generated binary (not on macOS)"
+	echo "  --valgrind   Override defaults and use valgrind for runtime testing (not on macOS)"
+	echo "  --thread     Switch memory sanitisation to ThreadSanitizer (catches data races) (not on macOS)"
 	exit 0
 fi
 
@@ -53,7 +58,7 @@ run_binary() {
 	local cmd=()
 
 	# Use valgrind only if explicitly requested
-	if [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == true ]] && has_valgrind; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == true ]] && has_valgrind; then
 		local suppress=""
 
 		if [[ -f "$HOME/.config/valgrind/rust.supp" ]]; then
@@ -66,7 +71,7 @@ run_binary() {
 	cmd+=(./"${OUT}")
 
 	# Force leak detection behaviour on for ASan executions
-	if [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]] && [[ "$RUN_THREAD_SAN" == false ]]; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]] && [[ "$RUN_THREAD_SAN" == false ]]; then
 		export ASAN_OPTIONS="detect_leaks=1"
 	fi
 
@@ -119,7 +124,7 @@ s)
 	;;
 
 f90)
-	if [[ "$DEBUG" == true ]]; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
 		gfortran "${SRC}" -g -O0 -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -march=native ${SAN_FLAGS} -o "${OUT}"
 	else
 		gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
@@ -141,7 +146,7 @@ nim)
 m | mm)
 	COMPILER="clang"
 	[[ "${EXT}" == "mm" ]] && COMPILER="clang++"
-	if [[ "$DEBUG" == true ]]; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
 		$COMPILER -g -Wall -Werror -Wextra -fobjc-arc -framework Foundation ${SAN_FLAGS} "${SRC}" -o "${OUT}"
 	else
 		$COMPILER -O2 -Wall -Werror -Wextra -fobjc-arc -framework Foundation "${SRC}" -o "${OUT}"
@@ -168,7 +173,7 @@ hs)
 	;;
 
 c)
-	if [[ "$DEBUG" == true ]]; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
 		gcc -g -Wall -Wextra -pedantic -std=c11 ${SAN_FLAGS} -o "${OUT}" "${SRC}"
 	else
 		gcc -Wall -Wextra -Werror -std=c11 -O2 -o "${OUT}" "${SRC}"
@@ -177,7 +182,7 @@ c)
 	;;
 
 cpp | c++ | cxx)
-	if [[ "$DEBUG" == true ]]; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
 		g++ -g -Wall -Wextra -pedantic -std=c++2a ${SAN_FLAGS} -o "${OUT}" "${SRC}"
 	else
 		g++ -Wall -Wextra -Werror -std=c++2a -O2 -o "${OUT}" "${SRC}"
@@ -200,7 +205,7 @@ java)
 	;;
 
 rs)
-	if [[ "$DEBUG" == true ]]; then
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
 		rustc -g ${RUST_SAN} "${SRC}" -o "${OUT}"
 	else
 		rustc -O "${SRC}" -o "${OUT}"
