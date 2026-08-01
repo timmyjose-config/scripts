@@ -82,7 +82,7 @@ run_binary() {
 	fi
 
 	if [[ "$CLEAN" == true ]]; then
-		rm -f "${OUT}"
+		rm -f "${OUT}" *.smod *.mod
 	fi
 }
 
