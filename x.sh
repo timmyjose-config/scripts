@@ -125,9 +125,9 @@ s)
 
 f90)
 	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
-		gfortran "${SRC}" -g -O0 -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -march=native ${SAN_FLAGS} -o "${OUT}"
+		gfortran "${SRC}" -g -O0 -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -Wtrampolines -pedantic -march=native ${SAN_FLAGS} -o "${OUT}"
 	else
-		gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -pedantic -O2 -march=native -o "${OUT}"
+		gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -Wtrampolines -pedantic -O2 -march=native -o "${OUT}"
 	fi
 
 	run_binary
