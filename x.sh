@@ -7,29 +7,53 @@ CLEAN=true
 RUN_VALGRIND=false
 RUN_THREAD_SAN=false
 IS_MACOS=false
+PROGRAM_ARGS=()
 
 if [[ $(uname -s) == "Darwin" ]]; then
 	IS_MACOS=true
 fi
 
-for arg in "$@"; do
-	case $arg in
-	--help) SHOW_HELP=true ;;
-	--no-debug) DEBUG=false ;;
-	--no-clean) CLEAN=false ;;
-	--valgrind) RUN_VALGRIND=true ;;
-	--thread) RUN_THREAD_SAN=true ;;
+# Parse options and separate the source file from program runtime arguments
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--help)
+		SHOW_HELP=true
+		shift
+		;;
+	--no-debug)
+		DEBUG=false
+		shift
+		;;
+	--no-clean)
+		CLEAN=false
+		shift
+		;;
+	--valgrind)
+		RUN_VALGRIND=true
+		shift
+		;;
+	--thread)
+		RUN_THREAD_SAN=true
+		shift
+		;;
 	-*)
-		echo "Unknown option: $arg"
+		echo "Unknown option: $1"
 		exit 1
 		;;
-	*) SRC="$arg" ;;
+	*)
+		if [[ -z "$SRC" ]]; then
+			SRC="$1"
+		else
+			PROGRAM_ARGS+=("$1")
+		fi
+		shift
+		;;
 	esac
 done
 
 # If help was requested, show the various options we support
 if [[ "$SHOW_HELP" == true ]]; then
-	echo "Usage: x.sh [options] <input file>"
+	echo "Usage: x.sh [options] <input file> [program arguments...]"
 	echo "Options:"
 	echo "  --help       Show this help menu"
 	echo "  --no-debug   Disable debug mode and optimisations (not on macOS)"
@@ -42,7 +66,7 @@ fi
 # Ensure we have a source file
 if [[ -z "$SRC" ]]; then
 	echo "Error: No source file provided."
-	echo "Usage: x.sh [options] <input file>"
+	echo "Usage: x.sh [options] <input file> [program arguments...]"
 	exit 1
 fi
 
@@ -68,7 +92,7 @@ run_binary() {
 		cmd+=(valgrind "$suppress" --leak-check=full --show-leak-kinds=all --track-origins=yes)
 	fi
 
-	cmd+=(./"${OUT}")
+	cmd+=(./"${OUT}" "${PROGRAM_ARGS[@]}")
 
 	# Force leak detection behaviour on for ASan executions
 	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]] && [[ "$RUN_THREAD_SAN" == false ]]; then
@@ -168,7 +192,12 @@ hs)
 		ghc -O2 -o "${OUT}" "${SRC}"
 	fi
 
-	if [[ -f "${INPUT}" ]]; then ./"${OUT}" <"${INPUT}"; else ./"${OUT}"; fi
+	if [[ -f "${INPUT}" ]]; then
+		./"${OUT}" "${PROGRAM_ARGS[@]}" <"${INPUT}"
+	else
+		./"${OUT}" "${PROGRAM_ARGS[@]}"
+	fi
+
 	[[ "$CLEAN" == true ]] && rm -f "${OUT}" "${OUT}".hi "${OUT}".o
 	;;
 
@@ -194,9 +223,9 @@ java)
 	javac "${SRC}"
 
 	if [[ -f "${INPUT}" ]]; then
-		java -cp . "${OUT}" <"${INPUT}"
+		java -cp . "${OUT}" "${PROGRAM_ARGS[@]}" <"${INPUT}"
 	else
-		java -cp . "${OUT}"
+		java -cp . "${OUT}" "${PROGRAM_ARGS[@]}"
 	fi
 
 	if [[ "$CLEAN" == true ]]; then
@@ -215,9 +244,9 @@ rs)
 
 py)
 	if [[ -f "${INPUT}" ]]; then
-		python3 "${SRC}" <"${INPUT}"
+		python3 "${SRC}" "${PROGRAM_ARGS[@]}" <"${INPUT}"
 	else
-		python3 "${SRC}"
+		python3 "${SRC}" "${PROGRAM_ARGS[@]}"
 	fi
 	;;
 
