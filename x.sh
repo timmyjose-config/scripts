@@ -7,6 +7,9 @@ CLEAN=true
 RUN_VALGRIND=false
 RUN_THREAD_SAN=false
 IS_MACOS=false
+PARALLEL=false
+IMAGE_COUNT=""
+CAF_LAUNCHER=""
 PROGRAM_ARGS=()
 
 if [[ $(uname -s) == "Darwin" ]]; then
@@ -36,6 +39,21 @@ while [[ $# -gt 0 ]]; do
 		RUN_THREAD_SAN=true
 		shift
 		;;
+	--images=*)
+		PARALLEL=true
+		IMAGE_COUNT="${1#*=}"
+		shift
+		;;
+	--images)
+		PARALLEL=true
+		if [[ $# -gt 1 ]] && [[ "$2" =~ ^([1-9][0-9]*|auto)$ ]]; then
+			IMAGE_COUNT="$2"
+			shift 2
+		else
+			IMAGE_COUNT="auto"
+			shift
+		fi
+		;;
 	-*)
 		echo "Unknown option: $1"
 		exit 1
@@ -56,10 +74,11 @@ if [[ "$SHOW_HELP" == true ]]; then
 	echo "Usage: x.sh [options] <input file> [program arguments...]"
 	echo "Options:"
 	echo "  --help       Show this help menu"
-	echo "  --no-debug   Disable debug mode and optimisations (not on macOS)"
-	echo "  --no-clean   Prevent deletion of the generated binary (not on macOS)"
+	echo "  --no-debug   Build with optimisations and without debug checks"
+	echo "  --no-clean   Prevent deletion of the generated binary"
 	echo "  --valgrind   Override defaults and use valgrind for runtime testing (not on macOS)"
 	echo "  --thread     Switch memory sanitisation to ThreadSanitizer (catches data races) (not on macOS)"
+	echo "  --images [N|auto]  Enable parallel Coarray Fortran; bare --images uses all logical CPUs"
 	exit 0
 fi
 
@@ -74,12 +93,85 @@ OUT="${SRC%.*}"
 EXT="${SRC##*.}"
 INPUT="${SRC%.*}.in"
 
+if [[ "$PARALLEL" == true ]] && [[ "$EXT" != "f90" ]]; then
+	echo "Error: --images is only supported for Coarray Fortran (.f90) programs."
+	exit 1
+fi
+
+logical_cpu_count() {
+	if [[ "$IS_MACOS" == true ]]; then
+		sysctl -n hw.logicalcpu
+	else
+		getconf _NPROCESSORS_ONLN
+	fi
+}
+
+configure_coarrays() {
+	local caf_config=""
+	local cafrun_config=""
+	local word=""
+	local placeholder="\${@}"
+	local found_placeholder=false
+	local -a caf_words=()
+
+	if ! command -v caf &>/dev/null || ! command -v cafrun &>/dev/null; then
+		echo "Error: --images requires OpenCoarrays (caf and cafrun must be installed)."
+		exit 1
+	fi
+
+	if [[ -z "$IMAGE_COUNT" ]] || [[ "$IMAGE_COUNT" == "auto" ]]; then
+		IMAGE_COUNT=$(logical_cpu_count)
+	fi
+
+	if ! [[ "$IMAGE_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+		echo "Error: --images expects a positive integer or 'auto'."
+		exit 1
+	fi
+
+	CAF_COMPILE_PREFIX=()
+	CAF_COMPILE_SUFFIX=()
+	if [[ "$IS_MACOS" == true ]]; then
+		caf_config=$(caf --show) || exit 1
+		read -r -a caf_words <<<"$caf_config"
+		for word in "${caf_words[@]}"; do
+			if [[ "$word" == "$placeholder" ]]; then
+				found_placeholder=true
+			elif [[ "$found_placeholder" == false ]]; then
+				CAF_COMPILE_PREFIX+=("$word")
+			else
+				CAF_COMPILE_SUFFIX+=("$word")
+			fi
+		done
+
+		if [[ "$found_placeholder" == false ]] || [[ ${#CAF_COMPILE_PREFIX[@]} -eq 0 ]]; then
+			echo "Error: Could not understand the local OpenCoarrays compiler configuration."
+			exit 1
+		fi
+	else
+		# Ubuntu's caf wrapper can be broken when its OpenMPI development
+		# package is out of sync; the shared runtime is linker-discoverable.
+		CAF_COMPILE_PREFIX=(gfortran -fcoarray=lib)
+		CAF_COMPILE_SUFFIX=(-lcaf_openmpi -pthread)
+	fi
+
+	cafrun_config=$(cafrun --show) || exit 1
+	read -r CAF_LAUNCHER _ <<<"$cafrun_config"
+	if [[ "$CAF_LAUNCHER" != */* ]]; then
+		CAF_LAUNCHER=$(command -v "$CAF_LAUNCHER")
+	fi
+	if [[ -z "$CAF_LAUNCHER" ]] || [[ ! -x "$CAF_LAUNCHER" ]]; then
+		echo "Error: Could not find the launcher configured by OpenCoarrays."
+		exit 1
+	fi
+}
+
 has_valgrind() {
 	command -v valgrind &>/dev/null
 }
 
 run_binary() {
 	local cmd=()
+	local -a program_command=(./"${OUT}" "${PROGRAM_ARGS[@]}")
 
 	# Use valgrind only if explicitly requested
 	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == true ]] && has_valgrind; then
@@ -92,7 +184,14 @@ run_binary() {
 		cmd+=(valgrind "$suppress" --leak-check=full --show-leak-kinds=all --track-origins=yes)
 	fi
 
-	cmd+=(./"${OUT}" "${PROGRAM_ARGS[@]}")
+	if [[ "$PARALLEL" == true ]]; then
+		cmd+=("$CAF_LAUNCHER" -n "$IMAGE_COUNT")
+		program_command=(./"${OUT}" "${PROGRAM_ARGS[@]}")
+		if [[ "$IS_MACOS" == false ]] && [[ "$CAF_LAUNCHER" == *openmpi* ]] && [[ -z "${OMPI_MCA_osc:-}" ]]; then
+			export OMPI_MCA_osc=sm
+		fi
+	fi
+	cmd+=("${program_command[@]}")
 
 	# Force leak detection behaviour on for ASan executions
 	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]] && [[ "$RUN_THREAD_SAN" == false ]]; then
@@ -106,7 +205,7 @@ run_binary() {
 	fi
 
 	if [[ "$CLEAN" == true ]]; then
-		rm -f "${OUT}" *.smod *.mod
+		rm -f -- "${OUT}" ./*.smod ./*.mod
 	fi
 }
 
@@ -148,10 +247,41 @@ s)
 	;;
 
 f90)
-	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]]; then
-		gfortran "${SRC}" -g -O0 -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -Wtrampolines -pedantic -march=native ${SAN_FLAGS} -o "${OUT}"
+	if [[ "$IS_MACOS" == true ]] && [[ -z "${MACOSX_DEPLOYMENT_TARGET:-}" ]]; then
+		IFS=. read -r MACOS_MAJOR MACOS_MINOR _ <<<"$(sw_vers -productVersion)"
+		export MACOSX_DEPLOYMENT_TARGET="${MACOS_MAJOR}.${MACOS_MINOR:-0}"
+	fi
+
+	FORTRAN_FLAGS=(-std=f2023 -Wall -Wextra -Wtrampolines -pedantic -march=native)
+	FORTRAN_SAN_FLAGS=()
+	if [[ "$DEBUG" == true ]]; then
+		FORTRAN_FLAGS+=(-g -O0 -fcheck=all -fbacktrace)
 	else
-		gfortran "${SRC}" -fcoarray=single -fbounds-check -std=f2023 -Wall -Wextra -Wtrampolines -pedantic -O2 -march=native -o "${OUT}"
+		FORTRAN_FLAGS+=(-O2)
+	fi
+
+	if [[ "$PARALLEL" == true ]]; then
+		if [[ "$RUN_VALGRIND" == true ]] || [[ "$RUN_THREAD_SAN" == true ]]; then
+			echo "Error: --valgrind and --thread are not supported with multi-image Coarray Fortran."
+			exit 1
+		fi
+		configure_coarrays
+		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]]; then
+			# ASan crashes while OpenMPI/OpenCoarrays is initialising on Ubuntu.
+			FORTRAN_FLAGS+=(-fsanitize=undefined)
+		fi
+		if ! "${CAF_COMPILE_PREFIX[@]}" "${SRC}" "${FORTRAN_FLAGS[@]}" -o "${OUT}" "${CAF_COMPILE_SUFFIX[@]}"; then
+			exit 1
+		fi
+	else
+		FORTRAN_FLAGS+=(-fcoarray=single)
+		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]] && [[ "$RUN_VALGRIND" == false ]]; then
+			read -r -a FORTRAN_SAN_FLAGS <<<"$SAN_FLAGS"
+			FORTRAN_FLAGS+=("${FORTRAN_SAN_FLAGS[@]}")
+		fi
+		if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -o "${OUT}"; then
+			exit 1
+		fi
 	fi
 
 	run_binary
