@@ -9,7 +9,6 @@ RUN_THREAD_SAN=false
 IS_MACOS=false
 PARALLEL=false
 IMAGE_COUNT=""
-CAF_LAUNCHER=""
 PROGRAM_ARGS=()
 
 if [[ $(uname -s) == "Darwin" ]]; then
@@ -106,61 +105,13 @@ logical_cpu_count() {
 	fi
 }
 
-configure_coarrays() {
-	local caf_config=""
-	local cafrun_config=""
-	local word=""
-	local placeholder="\${@}"
-	local found_placeholder=false
-	local -a caf_words=()
-
-	if ! command -v caf &>/dev/null || ! command -v cafrun &>/dev/null; then
-		echo "Error: --images requires OpenCoarrays (caf and cafrun must be installed)."
-		exit 1
-	fi
-
+configure_coarray_images() {
 	if [[ -z "$IMAGE_COUNT" ]] || [[ "$IMAGE_COUNT" == "auto" ]]; then
 		IMAGE_COUNT=$(logical_cpu_count)
 	fi
 
 	if ! [[ "$IMAGE_COUNT" =~ ^[1-9][0-9]*$ ]]; then
 		echo "Error: --images expects a positive integer or 'auto'."
-		exit 1
-	fi
-
-	CAF_COMPILE_PREFIX=()
-	CAF_COMPILE_SUFFIX=()
-	if [[ "$IS_MACOS" == true ]]; then
-		caf_config=$(caf --show) || exit 1
-		read -r -a caf_words <<<"$caf_config"
-		for word in "${caf_words[@]}"; do
-			if [[ "$word" == "$placeholder" ]]; then
-				found_placeholder=true
-			elif [[ "$found_placeholder" == false ]]; then
-				CAF_COMPILE_PREFIX+=("$word")
-			else
-				CAF_COMPILE_SUFFIX+=("$word")
-			fi
-		done
-
-		if [[ "$found_placeholder" == false ]] || [[ ${#CAF_COMPILE_PREFIX[@]} -eq 0 ]]; then
-			echo "Error: Could not understand the local OpenCoarrays compiler configuration."
-			exit 1
-		fi
-	else
-		# Ubuntu's caf wrapper can be broken when its OpenMPI development
-		# package is out of sync; the shared runtime is linker-discoverable.
-		CAF_COMPILE_PREFIX=(gfortran -fcoarray=lib)
-		CAF_COMPILE_SUFFIX=(-lcaf_openmpi -pthread)
-	fi
-
-	cafrun_config=$(cafrun --show) || exit 1
-	read -r CAF_LAUNCHER _ <<<"$cafrun_config"
-	if [[ "$CAF_LAUNCHER" != */* ]]; then
-		CAF_LAUNCHER=$(command -v "$CAF_LAUNCHER")
-	fi
-	if [[ -z "$CAF_LAUNCHER" ]] || [[ ! -x "$CAF_LAUNCHER" ]]; then
-		echo "Error: Could not find the launcher configured by OpenCoarrays."
 		exit 1
 	fi
 }
@@ -185,11 +136,7 @@ run_binary() {
 	fi
 
 	if [[ "$PARALLEL" == true ]]; then
-		cmd+=("$CAF_LAUNCHER" -n "$IMAGE_COUNT")
-		program_command=(./"${OUT}" "${PROGRAM_ARGS[@]}")
-		if [[ "$IS_MACOS" == false ]] && [[ "$CAF_LAUNCHER" == *openmpi* ]] && [[ -z "${OMPI_MCA_osc:-}" ]]; then
-			export OMPI_MCA_osc=sm
-		fi
+		program_command=(env "GFORTRAN_NUM_IMAGES=$IMAGE_COUNT" ./"${OUT}" "${PROGRAM_ARGS[@]}")
 	fi
 	cmd+=("${program_command[@]}")
 
@@ -265,12 +212,11 @@ f90)
 			echo "Error: --valgrind and --thread are not supported with multi-image Coarray Fortran."
 			exit 1
 		fi
-		configure_coarrays
+		configure_coarray_images
 		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]]; then
-			# ASan crashes while OpenMPI/OpenCoarrays is initialising on Ubuntu.
 			FORTRAN_FLAGS+=(-fsanitize=undefined)
 		fi
-		if ! "${CAF_COMPILE_PREFIX[@]}" "${SRC}" "${FORTRAN_FLAGS[@]}" -o "${OUT}" "${CAF_COMPILE_SUFFIX[@]}"; then
+		if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -fcoarray=lib -o "${OUT}" -lcaf_shmem; then
 			exit 1
 		fi
 	else
