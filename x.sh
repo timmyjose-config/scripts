@@ -135,8 +135,10 @@ run_binary() {
 		cmd+=(valgrind "$suppress" --leak-check=full --show-leak-kinds=all --track-origins=yes)
 	fi
 
-	if [[ "$PARALLEL" == true ]]; then
-		program_command=(env "GFORTRAN_NUM_IMAGES=$IMAGE_COUNT" ./"${OUT}" "${PROGRAM_ARGS[@]}")
+	# Coarray Fortran needs an explicit single-image default when --images is omitted.
+	# Keep the variable scoped to Fortran binaries so other programs are unaffected.
+	if [[ "$EXT" == "f90" ]]; then
+		program_command=(env "GFORTRAN_NUM_IMAGES=${IMAGE_COUNT:-1}" ./"${OUT}" "${PROGRAM_ARGS[@]}")
 	fi
 	cmd+=("${program_command[@]}")
 
@@ -216,18 +218,17 @@ f90)
 		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]]; then
 			FORTRAN_FLAGS+=(-fsanitize=undefined)
 		fi
-		if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -fcoarray=lib -o "${OUT}" -lcaf_shmem; then
-			exit 1
-		fi
 	else
-		FORTRAN_FLAGS+=(-fcoarray=single)
 		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]] && [[ "$RUN_VALGRIND" == false ]]; then
 			read -r -a FORTRAN_SAN_FLAGS <<<"$SAN_FLAGS"
 			FORTRAN_FLAGS+=("${FORTRAN_SAN_FLAGS[@]}")
 		fi
-		if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -o "${OUT}"; then
-			exit 1
-		fi
+	fi
+
+	# Always use the library-based ABI so coarray programs compile even when
+	# they default to one image. Ordinary Fortran programs can use it as well.
+	if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -fcoarray=lib -o "${OUT}" -lcaf_shmem; then
+		exit 1
 	fi
 
 	run_binary
