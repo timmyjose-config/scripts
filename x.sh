@@ -9,6 +9,10 @@ RUN_THREAD_SAN=false
 IS_MACOS=false
 PARALLEL=false
 IMAGE_COUNT=""
+OPENMP=false
+OPENMP_THREAD_COUNT=""
+MPI=false
+MPI_RANK_COUNT=""
 PROGRAM_ARGS=()
 
 if [[ $(uname -s) == "Darwin" ]]; then
@@ -53,6 +57,36 @@ while [[ $# -gt 0 ]]; do
 			shift
 		fi
 		;;
+	--openmp=*)
+		OPENMP=true
+		OPENMP_THREAD_COUNT="${1#*=}"
+		shift
+		;;
+	--openmp)
+		OPENMP=true
+		if [[ $# -gt 1 ]] && [[ "$2" =~ ^([1-9][0-9]*|auto)$ ]]; then
+			OPENMP_THREAD_COUNT="$2"
+			shift 2
+		else
+			OPENMP_THREAD_COUNT="auto"
+			shift
+		fi
+		;;
+	--mpi=*)
+		MPI=true
+		MPI_RANK_COUNT="${1#*=}"
+		shift
+		;;
+	--mpi)
+		MPI=true
+		if [[ $# -gt 1 ]] && [[ "$2" =~ ^([1-9][0-9]*|auto)$ ]]; then
+			MPI_RANK_COUNT="$2"
+			shift 2
+		else
+			MPI_RANK_COUNT="auto"
+			shift
+		fi
+		;;
 	-*)
 		echo "Unknown option: $1"
 		exit 1
@@ -78,6 +112,8 @@ if [[ "$SHOW_HELP" == true ]]; then
 	echo "  --valgrind   Override defaults and use valgrind for runtime testing (not on macOS)"
 	echo "  --thread     Switch memory sanitisation to ThreadSanitizer (catches data races) (not on macOS)"
 	echo "  --images [N|auto]  Enable parallel Coarray Fortran; bare --images uses all logical CPUs"
+	echo "  --openmp [N|auto]  Enable OpenMP Fortran; bare --openmp uses all logical CPUs"
+	echo "  --mpi [N|auto]     Enable MPI Fortran; bare --mpi uses all logical CPUs"
 	exit 0
 fi
 
@@ -97,6 +133,30 @@ if [[ "$PARALLEL" == true ]] && [[ "$EXT" != "f90" ]]; then
 	exit 1
 fi
 
+if [[ "$OPENMP" == true ]] && [[ "$EXT" != "f90" ]]; then
+	echo "Error: --openmp is only supported for Fortran (.f90) programs."
+	exit 1
+fi
+
+if [[ "$MPI" == true ]] && [[ "$EXT" != "f90" ]]; then
+	echo "Error: --mpi is only supported for Fortran (.f90) programs."
+	exit 1
+fi
+
+MODE_COUNT=0
+[[ "$PARALLEL" == true ]] && ((MODE_COUNT += 1))
+[[ "$OPENMP" == true ]] && ((MODE_COUNT += 1))
+[[ "$MPI" == true ]] && ((MODE_COUNT += 1))
+if ((MODE_COUNT > 1)); then
+	echo "Error: --images, --openmp, and --mpi are mutually exclusive."
+	exit 1
+fi
+
+if [[ "$MPI" == true ]] && { [[ "$RUN_VALGRIND" == true ]] || [[ "$RUN_THREAD_SAN" == true ]]; }; then
+	echo "Error: --valgrind and --thread are not supported with MPI."
+	exit 1
+fi
+
 logical_cpu_count() {
 	if [[ "$IS_MACOS" == true ]]; then
 		sysctl -n hw.logicalcpu
@@ -112,6 +172,28 @@ configure_coarray_images() {
 
 	if ! [[ "$IMAGE_COUNT" =~ ^[1-9][0-9]*$ ]]; then
 		echo "Error: --images expects a positive integer or 'auto'."
+		exit 1
+	fi
+}
+
+configure_openmp_threads() {
+	if [[ -z "$OPENMP_THREAD_COUNT" ]] || [[ "$OPENMP_THREAD_COUNT" == "auto" ]]; then
+		OPENMP_THREAD_COUNT=$(logical_cpu_count)
+	fi
+
+	if ! [[ "$OPENMP_THREAD_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+		echo "Error: --openmp expects a positive integer or 'auto'."
+		exit 1
+	fi
+}
+
+configure_mpi_ranks() {
+	if [[ -z "$MPI_RANK_COUNT" ]] || [[ "$MPI_RANK_COUNT" == "auto" ]]; then
+		MPI_RANK_COUNT=$(logical_cpu_count)
+	fi
+
+	if ! [[ "$MPI_RANK_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+		echo "Error: --mpi expects a positive integer or 'auto'."
 		exit 1
 	fi
 }
@@ -135,9 +217,13 @@ run_binary() {
 		cmd+=(valgrind "$suppress" --leak-check=full --show-leak-kinds=all --track-origins=yes)
 	fi
 
+	if [[ "$MPI" == true ]]; then
+		program_command=(mpiexec -n "$MPI_RANK_COUNT" ./"${OUT}" "${PROGRAM_ARGS[@]}")
+	elif [[ "$OPENMP" == true ]]; then
+		program_command=(env "GFORTRAN_NUM_IMAGES=1" "OMP_NUM_THREADS=$OPENMP_THREAD_COUNT" ./"${OUT}" "${PROGRAM_ARGS[@]}")
 	# Coarray Fortran needs an explicit single-image default when --images is omitted.
 	# Keep the variable scoped to Fortran binaries so other programs are unaffected.
-	if [[ "$EXT" == "f90" ]]; then
+	elif [[ "$EXT" == "f90" ]]; then
 		program_command=(env "GFORTRAN_NUM_IMAGES=${IMAGE_COUNT:-1}" ./"${OUT}" "${PROGRAM_ARGS[@]}")
 	fi
 	cmd+=("${program_command[@]}")
@@ -218,17 +304,36 @@ f90)
 		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]]; then
 			FORTRAN_FLAGS+=(-fsanitize=undefined)
 		fi
+	elif [[ "$MPI" == true ]]; then
+		configure_mpi_ranks
+		if ! command -v mpifort &>/dev/null || ! command -v mpiexec &>/dev/null; then
+			echo "Error: MPI requires both mpifort and mpiexec."
+			exit 1
+		fi
+		FORTRAN_FLAGS+=(-fcoarray=single)
+		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]]; then
+			FORTRAN_FLAGS+=(-fsanitize=undefined)
+		fi
+		if ! env "OMPI_FC=$(command -v gfortran)" mpifort "${SRC}" "${FORTRAN_FLAGS[@]}" -o "${OUT}"; then
+			exit 1
+		fi
 	else
+		if [[ "$OPENMP" == true ]]; then
+			configure_openmp_threads
+			FORTRAN_FLAGS+=(-fopenmp)
+		fi
 		if [[ "$DEBUG" == true ]] && [[ "$IS_MACOS" == false ]] && [[ "$RUN_VALGRIND" == false ]]; then
 			read -r -a FORTRAN_SAN_FLAGS <<<"$SAN_FLAGS"
 			FORTRAN_FLAGS+=("${FORTRAN_SAN_FLAGS[@]}")
 		fi
 	fi
 
-	# Always use the library-based ABI so coarray programs compile even when
-	# they default to one image. Ordinary Fortran programs can use it as well.
-	if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -fcoarray=lib -o "${OUT}" -lcaf_shmem; then
-		exit 1
+	if [[ "$MPI" == false ]]; then
+		# Always use the library-based ABI so coarray programs compile even when
+		# they default to one image. Ordinary Fortran programs can use it as well.
+		if ! gfortran "${SRC}" "${FORTRAN_FLAGS[@]}" -fcoarray=lib -o "${OUT}" -lcaf_shmem; then
+			exit 1
+		fi
 	fi
 
 	run_binary
