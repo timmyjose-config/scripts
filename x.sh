@@ -204,27 +204,33 @@ has_valgrind() {
 
 run_binary() {
 	local cmd=()
+	local env_args=()
 	local -a program_command=(./"${OUT}" "${PROGRAM_ARGS[@]}")
-
-	# Use valgrind only if explicitly requested
-	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == true ]] && has_valgrind; then
-		local suppress=""
-
-		if [[ -f "$HOME/.config/valgrind/rust.supp" ]]; then
-			echo "Suppressions file found"
-			suppress="--suppressions=$HOME/.config/valgrind/rust.supp"
-		fi
-		cmd+=(valgrind "$suppress" --leak-check=full --show-leak-kinds=all --track-origins=yes)
-	fi
 
 	if [[ "$MPI" == true ]]; then
 		program_command=(mpiexec -n "$MPI_RANK_COUNT" ./"${OUT}" "${PROGRAM_ARGS[@]}")
 	elif [[ "$OPENMP" == true ]]; then
-		program_command=(env "GFORTRAN_NUM_IMAGES=1" "OMP_NUM_THREADS=$OPENMP_THREAD_COUNT" ./"${OUT}" "${PROGRAM_ARGS[@]}")
+		env_args+=("GFORTRAN_NUM_IMAGES=1" "OMP_NUM_THREADS=$OPENMP_THREAD_COUNT")
 	# Coarray Fortran needs an explicit single-image default when --images is omitted.
 	# Keep the variable scoped to Fortran binaries so other programs are unaffected.
 	elif [[ "$EXT" == "f90" ]]; then
-		program_command=(env "GFORTRAN_NUM_IMAGES=${IMAGE_COUNT:-1}" ./"${OUT}" "${PROGRAM_ARGS[@]}")
+		env_args+=("GFORTRAN_NUM_IMAGES=${IMAGE_COUNT:-1}")
+	fi
+
+	# Apply environment settings outside Valgrind so multicall implementations of
+	# env do not inherit Valgrind's internal tool name as their program name.
+	if ((${#env_args[@]} > 0)); then
+		cmd+=(env "${env_args[@]}")
+	fi
+
+	# Use valgrind only if explicitly requested
+	if [[ "$IS_MACOS" == false ]] && [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == true ]] && has_valgrind; then
+		cmd+=(valgrind)
+		if [[ -f "$HOME/.config/valgrind/rust.supp" ]]; then
+			echo "Suppressions file found"
+			cmd+=("--suppressions=$HOME/.config/valgrind/rust.supp")
+		fi
+		cmd+=(--leak-check=full --show-leak-kinds=all --track-origins=yes)
 	fi
 	cmd+=("${program_command[@]}")
 
