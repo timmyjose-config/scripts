@@ -271,29 +271,6 @@ if [[ "$DEBUG" == true ]] && [[ "$RUN_VALGRIND" == false ]]; then
 fi
 
 case ${EXT} in
-oz)
-	# Compile Oz functors, execute them, then remove the generated pickle unless
-	# --no-clean was requested. Keep stdin redirection consistent with other modes.
-	if ! command -v ozc &>/dev/null || ! command -v ozengine &>/dev/null; then
-		echo "Error: Mozart 2 is not on PATH. Start a new shell or add ~/Library/Mozart2/bin to PATH."
-		exit 1
-	fi
-
-	if ! ozc -c "${SRC}" -o "${OUT}.ozf"; then
-		exit 1
-	fi
-
-	if [[ -f "${INPUT}" ]]; then
-		ozengine "${OUT}.ozf" "${PROGRAM_ARGS[@]}" <"${INPUT}"
-	else
-		ozengine "${OUT}.ozf" "${PROGRAM_ARGS[@]}"
-	fi
-	STATUS=$?
-	if [[ "${CLEAN}" == true ]]; then
-		rm -f -- "${OUT}.ozf"
-	fi
-	exit "${STATUS}"
-	;;
 s)
 	if [[ "$DEBUG" == true ]]; then
 		as -g -o "${OUT}.o" "${SRC}"
